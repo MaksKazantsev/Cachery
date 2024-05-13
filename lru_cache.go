@@ -34,7 +34,7 @@ type lruNode struct {
 	val any
 }
 
-func NewLRU() {
+func NewLRU() Cache {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := lru{
 		limit:         Default,
