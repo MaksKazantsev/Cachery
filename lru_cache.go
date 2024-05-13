@@ -49,6 +49,7 @@ func NewLRU() Cache {
 	go c.del()
 	go c.push()
 	go c.updatePos()
+	return &c
 }
 
 func newNode(key string, val any) *lruNode {
