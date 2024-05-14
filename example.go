@@ -7,7 +7,6 @@ type Cache interface {
 	Set(ctx context.Context, key string, val any)
 }
 
-// New - cache constructor, requires cache type, additionally modifiers
-func New() Cache {
+func NewCache() Cache {
 	return NewLRU()
 }

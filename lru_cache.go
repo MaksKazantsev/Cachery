@@ -5,154 +5,161 @@ import (
 	"sync"
 )
 
-const Default = 10
+const DefaultLimit = 10
 
 type lru struct {
-	tail *lruNode
-	head *lruNode
+	len   uint64
+	limit uint64
 
+	ctx       context.Context
+	cancelCtx context.CancelFunc
+
+	mu   sync.RWMutex
 	vals map[string]any
 
-	stopCtx       context.Context
-	stopCancelCtx context.CancelFunc
+	head *lruNode
+	tail *lruNode
 
-	mu sync.RWMutex
+	pushCh    chan *lruNode
+	popCh     chan struct{}
+	changePos chan string
+}
 
-	delCh       chan struct{}
-	pushCh      chan *lruNode
-	updatePosCh chan string
+func (l *lru) Get(ctx context.Context, key string) any {
+	l.mu.RLock()
+	v, ok := l.vals[key]
+	l.mu.RUnlock()
 
-	limit uint64
-	len   uint64
+	if ok {
+		l.changePos <- key
+	}
+	return v
+}
+
+func (l *lru) Set(ctx context.Context, key string, val any) {
+	l.mu.Lock()
+	_, ok := l.vals[key]
+	if !ok {
+		l.vals[key] = val
+		l.pushCh <- newNode(key, val)
+	}
+	l.mu.Unlock()
+}
+
+func (l *lru) push() {
+	insertToStart := func(n *lruNode) {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		if l.head == nil {
+			l.head = n
+			l.tail = n
+		} else {
+			if l.len >= l.limit {
+				l.popCh <- struct{}{}
+			}
+			n.right = l.head
+			l.head.left = n
+			l.head = n
+		}
+		l.len++
+	}
+
+	for {
+		select {
+		case n := <-l.pushCh:
+			go insertToStart(n)
+		case <-l.ctx.Done():
+			return
+		}
+	}
+
+}
+func (l *lru) pop() {
+	deleteFromEnd := func() {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+
+		l.tail = l.tail.left
+		l.tail.right = nil
+	}
+
+	for {
+		select {
+		case <-l.popCh:
+			go deleteFromEnd()
+		case <-l.ctx.Done():
+			return
+		}
+	}
+}
+
+func (l *lru) updatePos() {
+	removeAndInsertAtStart := func(key string) {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+
+		curr := l.head
+
+		for curr != nil {
+			if curr.key == key && curr.left != nil {
+				if curr.right != nil {
+					curr.right.left = curr.left
+				} else {
+					l.tail = curr.left
+				}
+
+				curr.left.right = curr.right
+
+				curr.left = nil
+				curr.right = l.head
+				l.head.left = curr
+				l.head = curr
+
+				break
+			}
+
+			curr = curr.right
+		}
+	}
+
+	for {
+		select {
+		case key := <-l.changePos:
+			go removeAndInsertAtStart(key)
+		case <-l.ctx.Done():
+			return
+		}
+	}
 }
 
 type lruNode struct {
-	left  *lruNode
-	right *lruNode
-
 	key string
 	val any
+
+	right *lruNode
+	left  *lruNode
 }
 
 func NewLRU() Cache {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := lru{
-		limit:         Default,
-		vals:          make(map[string]any),
-		stopCtx:       ctx,
-		stopCancelCtx: cancel,
-		delCh:         make(chan struct{}),
-		pushCh:        make(chan *lruNode),
-		updatePosCh:   make(chan string),
+		limit:     DefaultLimit,
+		ctx:       ctx,
+		cancelCtx: cancel,
+		vals:      make(map[string]any),
+		pushCh:    make(chan *lruNode),
+		popCh:     make(chan struct{}),
+		changePos: make(chan string),
 	}
-
-	go c.del()
+	go c.pop()
 	go c.push()
 	go c.updatePos()
 	return &c
 }
 
 func newNode(key string, val any) *lruNode {
-	return &lruNode{key: key, val: val}
-}
-
-func (c *lru) Set(ctx context.Context, key string, val any) {
-	c.mu.Lock()
-	_, ok := c.vals[key]
-	if !ok {
-		c.vals[key] = val
-		c.pushCh <- newNode(key, val)
-	}
-	c.mu.Unlock()
-}
-
-func (c *lru) Get(ctx context.Context, key string) any {
-	c.mu.RLock()
-	val, ok := c.vals[key]
-	if ok {
-		c.updatePosCh <- key
-	}
-	c.mu.RUnlock()
-	return val
-}
-func (c *lru) del() {
-	deleteAtEnd := func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-
-		delete(c.vals, c.tail.key)
-		c.tail = c.tail.left
-		c.tail.right = nil
-	}
-
-	for {
-		select {
-		case <-c.delCh:
-			go deleteAtEnd()
-		case <-c.stopCtx.Done():
-			return
-		}
-	}
-}
-func (c *lru) push() {
-	insertToStart := func(n *lruNode) {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-
-		if c.head == nil {
-			c.head = n
-			c.tail = n
-		} else {
-			if c.len >= c.limit {
-				c.delCh <- struct{}{}
-			}
-			n.left = c.head
-			c.head.right = n
-			c.head = n
-		}
-		c.len++
-	}
-
-	for {
-		select {
-		case n := <-c.pushCh:
-			go insertToStart(n)
-		case <-c.stopCtx.Done():
-			return
-		}
-	}
-}
-func (c *lru) updatePos() {
-	removeAndAdd := func(key string) {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-
-		curr := c.head
-		for curr != nil {
-			if curr.key == key && curr.right != nil {
-				if curr.left != nil {
-					curr.right.left = curr.left
-				} else {
-					c.tail = curr.right
-				}
-				curr.right.left = curr.left
-
-				curr.right = nil
-				curr.left = c.head
-				c.head.right = curr
-				c.head = curr
-
-				break
-			}
-			curr = curr.left
-		}
-	}
-	for {
-		select {
-		case key := <-c.updatePosCh:
-			go removeAndAdd(key)
-		case <-c.stopCtx.Done():
-			return
-		}
+	return &lruNode{
+		key: key,
+		val: val,
 	}
 }
