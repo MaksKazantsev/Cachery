@@ -5,8 +5,10 @@ import (
 	"sync"
 )
 
-const DefaultLimit = 10
+// DefaultLimit is used as a default limit len of cache
+const DefaultLimit = 15
 
+// lru cache model
 type lru struct {
 	len   uint64
 	limit uint64
@@ -25,7 +27,8 @@ type lru struct {
 	changePos chan string
 }
 
-func (l *lru) Get(ctx context.Context, key string) any {
+// Get is used to get value from cache.
+func (l *lru) Get(ctx context.Context, key string) (bool, any) {
 	l.mu.RLock()
 	v, ok := l.vals[key]
 	l.mu.RUnlock()
@@ -33,9 +36,10 @@ func (l *lru) Get(ctx context.Context, key string) any {
 	if ok {
 		l.changePos <- key
 	}
-	return v
+	return true, v
 }
 
+// Set is used to set value in cache.
 func (l *lru) Set(ctx context.Context, key string, val any) {
 	l.mu.Lock()
 	_, ok := l.vals[key]
@@ -67,7 +71,7 @@ func (l *lru) push() {
 	for {
 		select {
 		case n := <-l.pushCh:
-			go insertToStart(n)
+			insertToStart(n)
 		case <-l.ctx.Done():
 			return
 		}
@@ -79,6 +83,7 @@ func (l *lru) pop() {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 
+		delete(l.vals, l.tail.key)
 		l.tail = l.tail.left
 		l.tail.right = nil
 	}
@@ -86,7 +91,7 @@ func (l *lru) pop() {
 	for {
 		select {
 		case <-l.popCh:
-			go deleteFromEnd()
+			deleteFromEnd()
 		case <-l.ctx.Done():
 			return
 		}
@@ -125,13 +130,14 @@ func (l *lru) updatePos() {
 	for {
 		select {
 		case key := <-l.changePos:
-			go removeAndInsertAtStart(key)
+			removeAndInsertAtStart(key)
 		case <-l.ctx.Done():
 			return
 		}
 	}
 }
 
+// lruNode is a model of node in linked list
 type lruNode struct {
 	key string
 	val any
@@ -140,6 +146,7 @@ type lruNode struct {
 	left  *lruNode
 }
 
+// NewLRU creates new cache.
 func NewLRU() Cache {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := lru{
