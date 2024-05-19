@@ -5,8 +5,6 @@ import (
 	"sync"
 )
 
-const DefaultLimit = 6
-
 type lru struct {
 	head *lruNode
 	tail *lruNode
@@ -28,23 +26,40 @@ type lru struct {
 // Get takes the value from cache by key and updates it's position in cache
 func (l *lru) Get(ctx context.Context, key string) (bool, any) {
 	l.mu.RLock()
-	v, ok := l.vals[key]
+	val, ok := l.vals[key]
 	l.mu.RUnlock()
+
 	if ok {
-		l.updateCh <- key
+		select {
+		case l.updateCh <- key:
+		case <-l.ctx.Done():
+			close(l.updateCh)
+		}
 	}
-	return true, v
+	return ok, val
 }
 
 // Set pushes a value into cache to the first position by key
 func (l *lru) Set(ctx context.Context, key string, val any) {
 	l.mu.Lock()
 	_, ok := l.vals[key]
-	if !ok {
-		l.vals[key] = val
-		l.pushCh <- newNode(key, val)
+	if ok {
+		l.mu.Unlock()
+		return
 	}
+	l.vals[key] = val
 	l.mu.Unlock()
+
+	select {
+	case l.pushCh <- newNode(key, val):
+	case <-l.ctx.Done():
+		close(l.pushCh)
+	}
+}
+
+// Stop stops the cache
+func (l *lru) Stop() {
+	l.cancelCtx()
 }
 
 type lruNode struct {
@@ -54,7 +69,7 @@ type lruNode struct {
 	val   any
 }
 
-func NewLRU() Cache {
+func NewLRU(mods ...Modifier) Cache {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &lru{
 		vals:      make(map[string]any),
@@ -65,6 +80,10 @@ func NewLRU() Cache {
 		updateCh:  make(chan string),
 		limit:     DefaultLimit,
 	}
+	for _, mod := range mods {
+		mod(&c)
+	}
+
 	go c.push()
 	go c.pop()
 	go c.update()
@@ -91,8 +110,8 @@ func (l *lru) update() {
 				}
 				c.left.right = c.right
 
-				c.right = l.head
 				c.left = nil
+				c.right = l.head
 				l.head.left = c
 				l.head = c
 
@@ -102,13 +121,8 @@ func (l *lru) update() {
 
 		}
 	}
-	for {
-		select {
-		case key := <-l.updateCh:
-			upd(key)
-		case <-l.ctx.Done():
-			return
-		}
+	for key := range l.updateCh {
+		upd(key)
 	}
 }
 
@@ -121,17 +135,15 @@ func (l *lru) pop() {
 		l.tail = l.tail.left
 		l.tail.right = nil
 	}
-	for {
-		select {
-		case <-l.delCh:
-			del()
-		case <-l.ctx.Done():
-			return
-		}
+	for range l.delCh {
+		del()
 	}
 }
 
 func (l *lru) push() {
+	defer func() {
+		close(l.delCh)
+	}()
 	insert := func(n *lruNode) {
 		l.mu.Lock()
 		defer l.mu.Unlock()
@@ -142,18 +154,14 @@ func (l *lru) push() {
 			if l.len >= l.limit {
 				l.delCh <- struct{}{}
 			}
-			l.head.left = n
+
 			n.right = l.head
+			l.head.left = n
 			l.head = n
 		}
 		l.len++
 	}
-	for {
-		select {
-		case n := <-l.pushCh:
-			insert(n)
-		case <-l.ctx.Done():
-			return
-		}
+	for n := range l.pushCh {
+		insert(n)
 	}
 }

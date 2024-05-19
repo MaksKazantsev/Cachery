@@ -5,16 +5,19 @@ import (
 	"fmt"
 )
 
+type Modifier func(cache any)
+
 type Cache interface {
 	Get(ctx context.Context, key string) (bool, any)
 	Set(ctx context.Context, key string, val any)
+	Stop()
 }
 
 // NewCache creates a new example of cache
-func NewCache(t cacheType) Cache {
+func NewCache(t cacheType, mods ...Modifier) Cache {
 	switch t {
 	case LRU:
-		return NewLRU()
+		return NewLRU(mods...)
 	case LFU:
 		return nil
 	default:
@@ -26,6 +29,7 @@ func NewCache(t cacheType) Cache {
 type cacheType string
 
 const (
-	LFU = "LFU"
-	LRU = "LRU"
+	LFU          = "LFU"
+	LRU          = "LRU"
+	DefaultLimit = 10
 )
