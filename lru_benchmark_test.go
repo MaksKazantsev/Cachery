@@ -6,17 +6,19 @@ import (
 )
 
 func BenchmarkLRUSet(b *testing.B) {
-	c := NewCache()
+	c := NewCache(LRU)
+	ctx := context.Background()
 
-	for i := 0; i < b.N; i++ {
-		c.Set(context.Background(), "key", "value")
+	for i := 0; i <= b.N; i++ {
+		c.Set(ctx, "key", "test")
 	}
 }
 
 func BenchmarkLRUGet(b *testing.B) {
-	c := NewCache()
+	c := NewCache(LRU)
+	ctx := context.Background()
 
-	for i := 0; i < b.N; i++ {
-		c.Get(context.Background(), "key")
+	for i := 0; i <= b.N; i++ {
+		c.Get(ctx, "key")
 	}
 }

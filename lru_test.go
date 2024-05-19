@@ -9,16 +9,6 @@ import (
 	"testing"
 )
 
-func TestLRU(t *testing.T) {
-	c := new(SuiteLRU)
-	c.cache = NewCache()
-
-	c.key = "key"
-	c.val = []byte("values")
-
-	suite.Run(t, c)
-}
-
 type SuiteLRU struct {
 	suite.Suite
 
@@ -28,16 +18,26 @@ type SuiteLRU struct {
 	val any
 }
 
+func TestLRU(t *testing.T) {
+	c := new(SuiteLRU)
+	c.cache = NewCache(LRU)
+
+	c.key = "key"
+	c.val = []byte("values")
+
+	suite.Run(t, c)
+}
+
 func (s *SuiteLRU) TestSetAndGet() {
 	s.cache.Set(context.Background(), s.key, s.val)
 
-	ok, val := s.cache.Get(context.Background(), s.key)
+	ok, value := s.cache.Get(context.Background(), s.key)
 
+	require.Equal(s.T(), s.val, value)
 	require.True(s.T(), ok)
-	require.Equal(s.T(), s.val, val)
 }
 
-func (s *SuiteLRU) TestMultiSetGet() {
+func (s *SuiteLRU) TestMultiSetAndGet() {
 	test := []struct {
 		key string
 		val any
@@ -75,5 +75,3 @@ func (s *SuiteLRU) TestMultiSetGet() {
 		})
 	}
 }
-
-// TODO: Extrusion test
