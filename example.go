@@ -12,7 +12,7 @@ type Cache interface {
 	Stop()
 }
 
-// NewCache creates a new example of cache
+// NewCache creates a new example of cache.
 func NewCache() Cache {
 	return &lru{}
 }
