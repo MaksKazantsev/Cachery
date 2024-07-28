@@ -1,4 +1,4 @@
-package cache
+package Cachery
 
 func newNode(key string, val any) *lruNode {
 	return &lruNode{key: key, val: val}

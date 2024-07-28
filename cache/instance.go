@@ -1,4 +1,4 @@
-package cache
+package Cachery
 
 import "context"
 
